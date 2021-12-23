@@ -102,6 +102,7 @@ type app struct {
 	client    *http.Client
 	wg        *sync.WaitGroup
 	inChan    <-chan string
+	outChan   chan<- string
 	errorChan chan<- error
 }
 
@@ -140,6 +141,7 @@ func main() {
 	}
 
 	inChan := make(chan string, *threads)
+	outChan := make(chan string)
 	errChan := make(chan error)
 
 	wgMain := new(sync.WaitGroup)
@@ -149,6 +151,14 @@ func main() {
 		defer wgMain.Done()
 		for err := range errChan {
 			log.Error(err)
+		}
+	}()
+
+	wgMain.Add(1)
+	go func() {
+		defer wgMain.Done()
+		for msg := range outChan {
+			log.Info(msg)
 		}
 	}()
 
@@ -163,6 +173,7 @@ func main() {
 	app := app{
 		client:    client,
 		inChan:    inChan,
+		outChan:   outChan,
 		errorChan: errChan,
 		wg:        new(sync.WaitGroup),
 	}
@@ -189,7 +200,8 @@ func main() {
 	close(inChan)
 	app.wg.Wait()
 	close(errChan)
-	// wait for error channel to finish
+	close(outChan)
+	// wait for error and output channel to finish
 	wgMain.Wait()
 }
 
@@ -213,6 +225,7 @@ func (a *app) worker() {
 			a.errorChan <- err
 			continue
 		}
+		a.outChan <- fmt.Sprintf("Successfully penetrated %s", x)
 	}
 
 	log.Debug("worker done")
@@ -240,6 +253,7 @@ func (a *app) request(ctx context.Context, url, payload string) error {
 	q.Add("Parameter", payload)
 	r.URL.RawQuery = q.Encode()
 
+	r.Header.Set("Connection", "close")
 	r.Header.Set("Accept", "*/*")
 
 	resp, err := a.client.Do(r)
