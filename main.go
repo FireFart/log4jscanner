@@ -23,6 +23,7 @@ var (
 	urllist = flag.String("urllist", "", "file with URLs to scan")
 	domain  = flag.String("domain", "", "domain to capture dns requests")
 	timeout = flag.Duration("timeout", 2*time.Second, "timeout to target")
+	proxy   = flag.String("proxy", "", "proxy server to use")
 )
 
 var (
@@ -162,9 +163,20 @@ func main() {
 		}
 	}()
 
+	var proxyTransport func(*http.Request) (*url.URL, error)
+	if *proxy != "" {
+		proxyUrl, err := url.Parse(*proxy)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		proxyTransport = http.ProxyURL(proxyUrl)
+	}
+
 	client := &http.Client{
 		Timeout: *timeout,
 		Transport: &http.Transport{
+			Proxy: proxyTransport,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
 			},
