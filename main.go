@@ -297,6 +297,8 @@ func (a *app) worker() {
 }
 
 func (a *app) request(ctx context.Context, method, url, payload string, body io.Reader) (int, error) {
+	atomic.AddInt64(&a.httpRequests, 1)
+
 	r, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return -1, err
@@ -334,8 +336,6 @@ func (a *app) request(ctx context.Context, method, url, payload string, body io.
 	if err != nil {
 		return -1, err
 	}
-
-	atomic.AddInt64(&a.httpRequests, 1)
 
 	return resp.StatusCode, nil
 }
